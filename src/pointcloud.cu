@@ -26,6 +26,17 @@ void depthToWorldPCDKernel(const float* depth, float* outPCD,
                            const float* extrinsics,
                            int width, int height) 
 {
+    // Cache extrinsics matrix in shared memory for faster access
+    __shared__ float sharedExtrinsics[16];
+    
+    // Have first 16 threads in the block load the extrinsics matrix
+    if (threadIdx.x < 16) {
+        sharedExtrinsics[threadIdx.x] = extrinsics[threadIdx.x];
+    }
+    
+    // Synchronize to ensure all threads can access the shared memory
+    __syncthreads();
+    
     // Calculate thread ID
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -50,12 +61,12 @@ void depthToWorldPCDKernel(const float* depth, float* outPCD,
         float Yc = (v - cy) * d / fy;
         float Zc = d;
         
-        // Apply extrinsics (4x4)
+        // Apply extrinsics (4x4) using shared memory
         // [ Xw Yw Zw 1 ]^T = extrinsics_4x4 * [Xc Yc Zc 1]^T
-        float Xw = extrinsics[0] * Xc + extrinsics[1] * Yc + extrinsics[2] * Zc  + extrinsics[3];
-        float Yw = extrinsics[4] * Xc + extrinsics[5] * Yc + extrinsics[6] * Zc  + extrinsics[7];
-        float Zw = extrinsics[8] * Xc + extrinsics[9] * Yc + extrinsics[10]* Zc + extrinsics[11];
-        float W  = extrinsics[12]* Xc + extrinsics[13]* Yc + extrinsics[14]* Zc + extrinsics[15];
+        float Xw = sharedExtrinsics[0] * Xc + sharedExtrinsics[1] * Yc + sharedExtrinsics[2] * Zc  + sharedExtrinsics[3];
+        float Yw = sharedExtrinsics[4] * Xc + sharedExtrinsics[5] * Yc + sharedExtrinsics[6] * Zc  + sharedExtrinsics[7];
+        float Zw = sharedExtrinsics[8] * Xc + sharedExtrinsics[9] * Yc + sharedExtrinsics[10]* Zc + sharedExtrinsics[11];
+        float W  = sharedExtrinsics[12]* Xc + sharedExtrinsics[13]* Yc + sharedExtrinsics[14]* Zc + sharedExtrinsics[15];
         
         // Avoid dividing by zero
         if (W != 0.f) {
@@ -82,40 +93,49 @@ void depthToWorldPCD(const float* inDepth, void* outPointCloud,
     cudaSetDevice(gpuID);
 
     size_t numPixels = width * height;
-
+    
+    // Create CUDA stream for asynchronous operations
+    cudaStream_t stream;
+    CUDA_CHECK(cudaStreamCreate(&stream));
+    
+    // Use pinned memory or zero-copy for extrinsics (small buffer)
+    float* d_extrinsics = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_extrinsics, 16 * sizeof(float)));
+    CUDA_CHECK(cudaMemcpyAsync(d_extrinsics, extrinsics, 16 * sizeof(float), 
+                              cudaMemcpyHostToDevice, stream));
+    
     // Allocate device memory
     float* d_depth = nullptr;
     float* d_outPCD = nullptr;
     CUDA_CHECK(cudaMalloc(&d_depth, numPixels * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_outPCD, numPixels * 3 * sizeof(float)));
-
-    // Copy depth image to device
-    CUDA_CHECK(cudaMemcpy(d_depth, inDepth, numPixels * sizeof(float), cudaMemcpyHostToDevice));
-
-    // Copy extrinsics
-    float* d_extrinsics = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_extrinsics, 16 * sizeof(float)));
-    CUDA_CHECK(cudaMemcpy(d_extrinsics, extrinsics, 16 * sizeof(float), cudaMemcpyHostToDevice));
-
-    // Launch kernel with fewer threads but each thread processes more pixels
+    
+    // Asynchronously copy depth image to device
+    CUDA_CHECK(cudaMemcpyAsync(d_depth, inDepth, numPixels * sizeof(float), 
+                              cudaMemcpyHostToDevice, stream));
+    
+    // Launch kernel in the stream
     int blockSize = 256;
     int numThreads = min(65535 * blockSize, (int)numPixels); // Limit total threads
     int gridSize = (numThreads + blockSize - 1) / blockSize;
     
-    depthToWorldPCDKernel<<<gridSize, blockSize>>>(
+    depthToWorldPCDKernel<<<gridSize, blockSize, 0, stream>>>(
         d_depth, d_outPCD, fx, fy, cx, cy, d_extrinsics, width, height
     );
-    cudaDeviceSynchronize();
-
-    // Copy results back to host
-    CUDA_CHECK(cudaMemcpy(outPointCloud, d_outPCD,
-                          numPixels * 3 * sizeof(float),
-                          cudaMemcpyDeviceToHost));
-
+    
+    // Asynchronously copy results back to host
+    CUDA_CHECK(cudaMemcpyAsync(outPointCloud, d_outPCD,
+                              numPixels * 3 * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    
+    // Synchronize to ensure completion
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    
     // Free device memory
     CUDA_CHECK(cudaFree(d_depth));
     CUDA_CHECK(cudaFree(d_outPCD));
     CUDA_CHECK(cudaFree(d_extrinsics));
+    CUDA_CHECK(cudaStreamDestroy(stream));
 }
 
 extern "C" {
