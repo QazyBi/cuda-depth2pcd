@@ -6,12 +6,10 @@
 extern "C" {
 #endif
 
-// Optionally, define your Point3D structure if needed:
 struct Point3D {
     float x, y, z;
 };
 
-// CUDA kernel declaration (if needed):
 __global__ void depthToWorldPCDKernel(const float* depthImage, float* outPCD,
                                        float fx, float fy, float cx, float cy,
                                        const float* extrinsics,

@@ -4,8 +4,6 @@ import open3d as o3d
 import matplotlib.pyplot as plt
 import os
 import json
-import glob
-import time
 
 # Load the CUDA library
 cuda_lib = ctypes.CDLL("./build/libpointcloud.so")

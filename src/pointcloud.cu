@@ -1,10 +1,3 @@
-/**
- * pointcloud.cu
- *
- * Implements CUDA kernel to convert depth images to world-coordinate point clouds.
- * Each thread handles one pixel. The camera intrinsics/extrinsics are assumed known.
- */
-
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include "pointcloud.h"
@@ -19,7 +12,6 @@
     }                                                    \
 }
 
-// Optimized kernel where each thread processes multiple pixels
 __global__
 void depthToWorldPCDKernel(const float* depth, float* outPCD,
                            float fx, float fy, float cx, float cy,

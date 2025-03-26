@@ -24,7 +24,6 @@ cuda_lib.depthToWorldPCD.argtypes = [
     ctypes.c_int                     # gpuID
 ]
 
-# Create FastAPI app
 app = FastAPI(title="Point Cloud Processing API")
 
 # Add CORS middleware
